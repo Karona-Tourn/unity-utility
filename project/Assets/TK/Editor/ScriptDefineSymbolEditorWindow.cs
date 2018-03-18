@@ -7,16 +7,235 @@ using UnityEditor;
 
 public class ScriptDefineSymbolEditorWindow : EditorWindow
 {
-	private const string PREF_KEY = "script-define-symbol-index";
-	private const string SRC_FILE = "ScriptDefineSymbol.txt";
+	public class ScriptDefinedSymbolManager
+	{
+		public class Symbol
+		{
+			public string name = "";
+			public bool selected = false;
 
-	private string[] platforms = new string[0];
-	private List<bool> activeList = new List<bool> ();
-	private List<string> symbolList = new List<string> ();
-	private BuildTargetGroup selectedBuildTarget = BuildTargetGroup.Standalone;
-	private Vector2 scrollPos = Vector2.zero;
-	private int tabIndex = 0;
-	private string newSymbolName = "";
+			public Symbol () { }
+
+			public Symbol (string name, bool selected)
+			{
+				this.name = name;
+				this.selected = selected;
+			}
+		}
+
+		private const string SRC_FILE = "ScriptDefineSymbol.txt";
+		private List<Symbol>						_symbols			= new List<Symbol>();
+		private BuildTargetGroup					_selectedTarget		= BuildTargetGroup.Standalone;
+		private ScriptDefineSymbolEditorWindow		_window				= null;
+		private BuildTargetGroup[]                  _deprecatedTargets	= null;
+
+		private string[] GetDefinedSymbols ( BuildTargetGroup target )
+		{
+			return PlayerSettings
+				.GetScriptingDefineSymbolsForGroup ( target )
+				.Split ( ';' )
+				.Where ( s => !string.IsNullOrEmpty ( s ) )
+				.Select ( s => s.Trim () ).ToArray ();
+		}
+
+		private void SetDefinedSymbols ( BuildTargetGroup target, string[] symbols )
+		{
+			try
+			{
+				PlayerSettings.SetScriptingDefineSymbolsForGroup ( target, string.Join ( ";", symbols ) );
+			}
+			catch ( Exception ex )
+			{
+				Debug.LogWarning ( ex.Message );
+			}
+		}
+
+		public bool HasAnySymbol { get { return _symbols.Count > 0; } }
+
+		public List<Symbol> Symbols
+		{
+			get { return _symbols; }
+		}
+
+		//public BuildTargetGroup[] GetInstalledBuildTargets ()
+		//{
+		//	List<BuildTarget> installedTargets = new List<BuildTarget>();
+		//	var moduleManager = Type.GetType("UnityEditor.Modules.ModuleManager,UnityEditor.dll");
+		//	var isPlatformSupportLoaded = moduleManager.GetMethod("IsPlatformSupportLoaded", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+		//	var getTargetStringFromBuildTarget = moduleManager.GetMethod("GetTargetStringFromBuildTarget", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+
+		//	var targets = Enum.GetValues(typeof(BuildTarget));
+		//	for ( int i = 0; i < targets.Length; i++ )
+		//	{
+		//		var target = (BuildTarget)targets.GetValue ( i );
+		//		bool isInstalled = (bool)isPlatformSupportLoaded.Invoke ( null, new object[] { (string)getTargetStringFromBuildTarget.Invoke ( null, new object[] { target } ) } );
+		//		if ( !isInstalled ) continue;
+		//		installedTargets.Add ( target );
+		//	}
+
+		//	return installedTargets
+		//		.Select ( t => (BuildTargetGroup)Enum.Parse ( typeof ( BuildTargetGroup ), t.ToString () + "Group" ) )
+		//		.ToArray ();
+		//}
+
+		public ScriptDefinedSymbolManager ( ScriptDefineSymbolEditorWindow window )
+		{
+#pragma warning disable 0618
+			_deprecatedTargets = new BuildTargetGroup[]
+			{
+				BuildTargetGroup.Unknown,
+				(BuildTargetGroup)2, // WebPlayer
+				BuildTargetGroup.XBOX360,
+				BuildTargetGroup.PS3,
+				BuildTargetGroup.WP8,
+				BuildTargetGroup.BlackBerry,
+				BuildTargetGroup.SamsungTV,
+			};
+#pragma warning restore 0618
+			_window = window;
+		}
+
+		public BuildTargetGroup SelectedTarget
+		{
+			get { return _selectedTarget; }
+			set
+			{
+				_selectedTarget = value;
+
+				UnselectAll ();
+
+				var definedSymbols = GetDefinedSymbols(_selectedTarget);
+
+				for ( int i = definedSymbols.Length - 1; i >= 0; i-- )
+				{
+					_symbols.Find ( s => s.name == definedSymbols[i] ).selected = true;
+				}
+			}
+		}
+
+		public void UnselectAll ()
+		{
+			foreach(var s in _symbols)
+			{
+				s.selected = false;
+			}
+		}
+
+		public void Save ()
+		{
+			SetDefinedSymbols ( _selectedTarget, _symbols.Where ( s => s.selected ).Select ( s => s.name ).ToArray () );
+			_window.ShowNotification ( new GUIContent ( "Saved" ) );
+		}
+
+		public void DeleteSymbolAt (int index)
+		{
+			var deletedSymbol = _symbols[index];
+			_symbols.RemoveAt ( index );
+
+			SaveDataFile ();
+
+			var targets = Enum.GetValues(typeof(BuildTargetGroup));
+			for ( int i = 0; i < targets.Length; i++ )
+			{
+				var target = (BuildTargetGroup)targets.GetValue(i);
+
+				if ( _deprecatedTargets.Contains ( target ) ) continue;
+
+				List<string> symbols = new List<string>(GetDefinedSymbols ( target ));
+				symbols.Remove ( deletedSymbol.name );
+				SetDefinedSymbols ( target, symbols.ToArray () );
+			}
+		}
+
+		public void DeleteAllSymbols ()
+		{
+			_symbols.Clear ();
+			SaveDataFile ();
+			var targets = Enum.GetValues(typeof(BuildTargetGroup));
+			for ( int i = 0; i < targets.Length; i++ )
+			{
+				var target = (BuildTargetGroup)targets.GetValue(i);
+
+				if ( _deprecatedTargets.Contains ( target ) ) continue;
+
+				SetDefinedSymbols ( target, new string[0] );
+			}
+		}
+
+		// Updated data file contents with new updated symbol list
+		private void SaveDataFile ()
+		{
+			string content = "";
+
+			if ( _symbols.Count > 0 ) content = string.Join ( "\n", _symbols.Select ( s => s.name ).ToArray () );
+
+			File.WriteAllText ( EditorConstants.PATH_EDITOR_RESOURCE + SRC_FILE, content, System.Text.Encoding.UTF8 );
+
+			AssetDatabase.Refresh ();
+		}
+
+		public bool AddNewSymbol (string name)
+		{
+			if ( _symbols.Exists ( s => s.name == name ) ) return false;
+			_symbols.Add ( new Symbol ( name, false ) );
+			SaveDataFile ();
+			return true;
+		}
+
+		public void Init ()
+		{
+			_symbols.Clear ();
+
+			if ( !Directory.Exists ( EditorConstants.PATH_EDITOR_RESOURCE ) )
+			{
+				AssetDatabase.CreateFolder ( EditorConstants.FOLDER_ASSETS, EditorConstants.FOLDER_EDITOR_RESOURCE );
+				AssetDatabase.Refresh ();
+			}
+
+			var file = EditorGUIUtility.Load (SRC_FILE);
+			if ( file )
+			{
+				TextAsset ta = (TextAsset)file;
+				var symbols = ta.text.Split ('\n')
+				.Where (s => !string.IsNullOrEmpty (s))
+				.Select (s => new Symbol(){ name = s.Trim(), selected = false })
+				.ToArray ();
+
+				_symbols.AddRange ( symbols );
+			}
+
+			bool haveNewSymbol = false;
+
+			Array targets = Enum.GetValues(typeof(BuildTargetGroup));
+			for ( int i = 0; i < targets.Length; i++ )
+			{
+				var targetSymbols = GetDefinedSymbols ( (BuildTargetGroup)targets.GetValue ( i ) );
+				for ( int j = 0; j < targetSymbols.Length; j++ )
+				{
+					if ( _symbols.Exists ( s => s.name == targetSymbols[j] ) ) continue;
+
+					_symbols.Add ( new Symbol ()
+					{
+						name = targetSymbols[j],
+						selected = false
+					} );
+
+					haveNewSymbol = true;
+				}
+			}
+
+			if( haveNewSymbol )
+			{
+				SaveDataFile ();
+			}
+
+			SelectedTarget = BuildTargetGroup.Standalone;
+		}
+	}
+
+	private Vector2		_scrollPos		= Vector2.zero;
+	private string		_newSymbolName	= "";
+	private ScriptDefinedSymbolManager _symbolManager = null;
 
 	[MenuItem (EditorConstants.MENU_TEAM_NAME + "Defined Symbol Editor")]
 	private static void Open ()
@@ -24,214 +243,109 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 		GetWindow<ScriptDefineSymbolEditorWindow> ().titleContent = new GUIContent ("Script Symbol Define");
 	}
 
-	// Updated data file contents with new updated symbol list
-	private void SaveDataFile ()
-	{
-		string content = "";
-		if (symbolList.Count > 0)
-			content = string.Join ("\n", symbolList.ToArray ());
-		File.WriteAllText (EditorConstants.PATH_EDITOR_RESOURCE + SRC_FILE, content, System.Text.Encoding.UTF8);
-		AssetDatabase.Refresh ();
-	}
-
-	private IEnumerable<string> GetDefinedSymbols (BuildTargetGroup target)
-	{
-		return PlayerSettings.GetScriptingDefineSymbolsForGroup (target).Split (';').Where (s => !string.IsNullOrEmpty (s)).Select (s => s.Trim ());
-	}
-
-	private void Init ()
-	{
-		if (!Directory.Exists (EditorConstants.PATH_EDITOR_RESOURCE))
-		{
-			AssetDatabase.CreateFolder (EditorConstants.FOLDER_ASSETS, EditorConstants.FOLDER_EDITOR_RESOURCE);
-			AssetDatabase.Refresh ();
-		}
-
-		tabIndex = EditorPrefs.GetInt (PREF_KEY, 0);
-
-		var file = EditorGUIUtility.Load (SRC_FILE);
-		if (file)
-		{
-			symbolList.Clear ();
-			activeList.Clear ();
-
-			TextAsset ta = (TextAsset)file;
-			string[] symbols = ta.text.Split ('\n')
-				.Where (s => !string.IsNullOrEmpty (s))
-				.Select (s => s.Trim ()).ToArray ();
-			int length = symbols.Length;
-			for (int i = 0; i < length; i++)
-			{
-				symbolList.Add (symbols[i]);
-				activeList.Add (false);
-			}
-		}
-
-		platforms = new string[] {
-			BuildTargetGroup.Standalone.ToString(),
-			BuildTargetGroup.Android.ToString(),
-			BuildTargetGroup.iOS.ToString()
-		};
-
-		bool newUpdates = false;
-
-		for (int i = 0; i < platforms.Length; i++)
-		{
-			var p = (BuildTargetGroup)Enum.Parse (typeof (BuildTargetGroup), platforms[i]);
-			var symbols = GetDefinedSymbols (p);
-			foreach (var s in symbols)
-			{
-				if (!symbolList.Contains (s))
-				{
-					symbolList.Add (s);
-					activeList.Add (false);
-					newUpdates = true;
-				}
-			}
-		}
-
-		if (newUpdates)
-		{
-			SaveDataFile ();
-		}
-
-		SetSelectedTab (tabIndex);
-	}
-
-	public void LoadBuildTargetSymbols (BuildTargetGroup buildTarget)
-	{
-		selectedBuildTarget = buildTarget;
-		List<string> targetSymbols = new List<string> ();
-		targetSymbols.AddRange (GetDefinedSymbols (buildTarget));
-		for (int i = 0; i < symbolList.Count; i++)
-		{
-			activeList[i] = targetSymbols.Contains (symbolList[i]);
-		}
-		scrollPos = Vector2.zero;
-	}
-
 	private void OnEnable ()
 	{
-		Init ();
+		minSize = new Vector2 (400, 300);
+		_symbolManager = new ScriptDefinedSymbolManager (this);
+		_symbolManager.Init ();
 	}
 
-	private void OnDisable ()
+	private void DrawSymbolList ()
 	{
-		EditorPrefs.SetInt (PREF_KEY, tabIndex);
-	}
-
-	private void ClearAllSymboles ()
-	{
-		symbolList.Clear ();
-		activeList.Clear ();
-	}
-
-	private void RemoveSymbol (int index)
-	{
-		symbolList.RemoveAt (index);
-		activeList.RemoveAt (index);
-	}
-
-	private void DrawSymbolDefined (BuildTargetGroup buildTarget)
-	{
-		// Delete all symbole command
-		if (GUILayout.Button ("Delete All", GUILayout.Width (100)))
-		{
-			bool yes = EditorUtility.DisplayDialog ("Delete All", "Are you sure to delete all symobls?", "Yes", "No");
-			if (yes)
-			{
-				ClearAllSymboles ();
-				SaveDataFile ();
-				EditorUtility.DisplayDialog ("Delete All", "All symbols are deleted.", "OK");
-			}
-		}
-
 		// List all symbols
-		scrollPos = EditorGUILayout.BeginScrollView (scrollPos);
+		_scrollPos = EditorGUILayout.BeginScrollView (_scrollPos);
 
-		for (int i = 0; i < symbolList.Count; i++)
+		var symbols = _symbolManager.Symbols;
+
+		for (int i = 0; i < symbols.Count; i++)
 		{
+			var symbol = symbols[i];
 			EditorGUILayout.BeginHorizontal (EditorStyles.helpBox);
-			activeList[i] = EditorGUILayout.Toggle (activeList[i], GUILayout.Width (20));
+			symbol.selected = EditorGUILayout.Toggle ( symbol.selected, GUILayout.Width ( 20 ) );
+
 			bool deleted = false;
+
 			if (GUILayout.Button ("X", GUILayout.Width (20)))
 			{
-				bool yes = EditorUtility.DisplayDialog ("Delete", string.Format ("Are you sure to delete symbol {0}?", symbolList[i]), "Yes", "No");
+				bool yes = EditorUtility.DisplayDialog ("Delete", string.Format ("Are you sure to delete symbol {0}?", symbol.name), "Yes", "No");
 				if (yes)
 				{
-					RemoveSymbol (i);
-					SaveDataFile ();
-					EditorUtility.DisplayDialog ("Delete", "The symbol is deleted.", "OK");
+					_symbolManager.DeleteSymbolAt ( i );
 					i--;
 					deleted = true;
+					ShowNotification ( new GUIContent ( "The symbol is deleted." ) );
 				}
 			}
+
 			if (!deleted)
 			{
-				EditorGUILayout.LabelField (symbolList [i], GUILayout.ExpandWidth (true));
+				EditorGUILayout.LabelField (symbol.name, GUILayout.ExpandWidth (true));
 			}
+
 			EditorGUILayout.EndHorizontal ();
+
+			if ( deleted ) break;
 		}
 
 		EditorGUILayout.EndScrollView ();
 	}
 
-	private void Save (BuildTargetGroup buildTarget)
-	{
-		List<string> selectedSymbols = new List<string> ();
-		for (int i = 0; i < symbolList.Count; i++)
-		{
-			if (activeList[i])
-				selectedSymbols.Add (symbolList[i]);
-		}
-		PlayerSettings.SetScriptingDefineSymbolsForGroup (buildTarget, string.Join (";", selectedSymbols.ToArray ()));
-		LoadBuildTargetSymbols (buildTarget);
-	}
-
-	private void SetSelectedTab (int index)
-	{
-		tabIndex = index;
-		LoadBuildTargetSymbols ((BuildTargetGroup)Enum.Parse (typeof (BuildTargetGroup), platforms[tabIndex]));
-	}
-
 	/// <summary>
 	/// Draw panel that can add a new symbol
 	/// </summary>
-	private void DrawAddPanel ()
+	private void DrawHead ()
 	{
 		EditorGUILayout.BeginHorizontal ();
 
-		newSymbolName = EditorGUILayout.TextField ("Symbol Name", newSymbolName, GUILayout.MaxWidth (500));
+		_newSymbolName = EditorGUILayout.TextField ( "Symbol Name", _newSymbolName, GUILayout.MaxWidth ( 450 ) );
 
-		if (GUILayout.Button ("X", GUILayout.Width (40)))
+		if ( GUILayout.Button ( "Add", GUILayout.Width ( 40 ) ) )
 		{
-			newSymbolName = "";
-		}
+			string safeSymbolName =  _newSymbolName.Trim ().Replace ("\n", "");
 
-		if (GUILayout.Button ("+", GUILayout.Width (40)))
-		{
-			newSymbolName = newSymbolName.Trim ();
-			newSymbolName = newSymbolName.Replace ("\n", "");
-			if (string.IsNullOrEmpty (newSymbolName))
+			if ( string.IsNullOrEmpty ( safeSymbolName ) )
 			{
-				EditorUtility.DisplayDialog ("Warn!", "Symbol name cannot be empty.", "OK");
+				EditorUtility.DisplayDialog ( "Warn!", "Symbol name cannot be empty.", "OK" );
 			}
-			else if (newSymbolName.Contains (" "))
+			else if ( _newSymbolName.Contains ( " " ) )
 			{
-				EditorUtility.DisplayDialog ("Warn!", "Symbol name cannot contain space.", "OK");
-			}
-			else if (symbolList.Contains (newSymbolName))
-			{
-				EditorUtility.DisplayDialog ("Error!", "The symbol already exists.", "OK");
+				EditorUtility.DisplayDialog ( "Warn!", "Symbol name cannot contain space.", "OK" );
 			}
 			else
 			{
-				symbolList.Add (newSymbolName);
-				activeList.Add (false);
-				newSymbolName = "";
-				SaveDataFile ();
-				EditorUtility.DisplayDialog ("Saved", "The new symbol is saved.", "OK");
+				bool success = _symbolManager.AddNewSymbol ( safeSymbolName );
+				if ( success )
+				{
+					_newSymbolName = "";
+					ShowNotification ( new GUIContent ( "New symbol is added" ) );
+
+					// Leave focus cursor from text field of symbol name
+					GUI.FocusControl ( null );
+				}
+				else
+				{
+					EditorUtility.DisplayDialog ( "Error!", "The symbol already exists.", "OK" );
+				}
 			}
+		}
+
+		// Delete all symbole command
+		if ( GUILayout.Button ( "Delete All", GUILayout.MaxWidth ( 90 ) ) )
+		{
+			if ( _symbolManager.HasAnySymbol )
+			{
+				bool yes = EditorUtility.DisplayDialog ("Delete All", "Are you sure to delete all symobls?", "Yes", "No");
+				if ( yes )
+				{
+					_symbolManager.DeleteAllSymbols ();
+					ShowNotification ( new GUIContent ( "All symbols are deleted." ) );
+				}
+			}
+		}
+
+		if ( GUILayout.Button ( "Save", GUILayout.MaxWidth ( 60 ) ) )
+		{
+			_symbolManager.Save ();
 		}
 
 		EditorGUILayout.EndHorizontal ();
@@ -239,16 +353,14 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 
 	private void OnGUI ()
 	{
-		int newIndex = GUILayout.Toolbar (tabIndex, platforms);
-		if (tabIndex != newIndex)
+		var target = (BuildTargetGroup)EditorGUILayout.EnumPopup ( "Platform", _symbolManager.SelectedTarget );
+		if ( target != _symbolManager.SelectedTarget )
 		{
-			SetSelectedTab (newIndex);
+			_scrollPos = Vector2.zero;
+			_symbolManager.SelectedTarget = target;
 		}
-		DrawAddPanel ();
-		DrawSymbolDefined (selectedBuildTarget);
-		if (GUILayout.Button ("SAVE"))
-		{
-			Save (selectedBuildTarget);
-		}
+
+		DrawHead ();
+		DrawSymbolList ();
 	}
 }
