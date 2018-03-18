@@ -27,7 +27,19 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 		private List<Symbol>						_symbols			= new List<Symbol>();
 		private BuildTargetGroup					_selectedTarget		= BuildTargetGroup.Standalone;
 		private ScriptDefineSymbolEditorWindow		_window				= null;
-		private BuildTargetGroup[]                  _deprecatedTargets	= null;
+
+#pragma warning disable 0618
+		static public readonly BuildTargetGroup[]             DeprecatedTargets  = new BuildTargetGroup[]
+		{
+			BuildTargetGroup.Unknown,
+			(BuildTargetGroup)2, // WebPlayer
+			BuildTargetGroup.XBOX360,
+			BuildTargetGroup.PS3,
+			BuildTargetGroup.WP8,
+			BuildTargetGroup.BlackBerry,
+			BuildTargetGroup.SamsungTV,
+		};
+#pragma warning restore 0618
 
 		private string[] GetDefinedSymbols ( BuildTargetGroup target )
 		{
@@ -80,18 +92,6 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 
 		public ScriptDefinedSymbolManager ( ScriptDefineSymbolEditorWindow window )
 		{
-#pragma warning disable 0618
-			_deprecatedTargets = new BuildTargetGroup[]
-			{
-				BuildTargetGroup.Unknown,
-				(BuildTargetGroup)2, // WebPlayer
-				BuildTargetGroup.XBOX360,
-				BuildTargetGroup.PS3,
-				BuildTargetGroup.WP8,
-				BuildTargetGroup.BlackBerry,
-				BuildTargetGroup.SamsungTV,
-			};
-#pragma warning restore 0618
 			_window = window;
 		}
 
@@ -139,7 +139,7 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 			{
 				var target = (BuildTargetGroup)targets.GetValue(i);
 
-				if ( _deprecatedTargets.Contains ( target ) ) continue;
+				if ( DeprecatedTargets.Contains ( target ) ) continue;
 
 				List<string> symbols = new List<string>(GetDefinedSymbols ( target ));
 				symbols.Remove ( deletedSymbol.name );
@@ -156,7 +156,7 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 			{
 				var target = (BuildTargetGroup)targets.GetValue(i);
 
-				if ( _deprecatedTargets.Contains ( target ) ) continue;
+				if ( DeprecatedTargets.Contains ( target ) ) continue;
 
 				SetDefinedSymbols ( target, new string[0] );
 			}
@@ -229,13 +229,14 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 				SaveDataFile ();
 			}
 
-			SelectedTarget = BuildTargetGroup.Standalone;
+			SelectedTarget = EditorUserBuildSettings.selectedBuildTargetGroup;
 		}
 	}
 
 	private Vector2		_scrollPos		= Vector2.zero;
 	private string		_newSymbolName	= "";
 	private ScriptDefinedSymbolManager _symbolManager = null;
+	private string[]    _targets        = null;
 
 	[MenuItem (EditorConstants.MENU_TEAM_NAME + "Defined Symbol Editor")]
 	private static void Open ()
@@ -248,6 +249,10 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 		minSize = new Vector2 (400, 300);
 		_symbolManager = new ScriptDefinedSymbolManager (this);
 		_symbolManager.Init ();
+
+		// TODO: we do this due to the fact that there will be Unknown platform appear in popup list of platform.
+		// That is y we selected only available platforms to display in the popup list
+		_targets = Enum.GetNames ( typeof ( BuildTargetGroup ) ).Except ( ScriptDefinedSymbolManager.DeprecatedTargets.Select ( t => t.ToString () ) ).ToArray();
 	}
 
 	private void DrawSymbolList ()
@@ -353,7 +358,10 @@ public class ScriptDefineSymbolEditorWindow : EditorWindow
 
 	private void OnGUI ()
 	{
-		var target = (BuildTargetGroup)EditorGUILayout.EnumPopup ( "Platform", _symbolManager.SelectedTarget );
+		int selectedIndex =ArrayUtility.FindIndex(_targets, t => t == _symbolManager.SelectedTarget.ToString());
+		int newSelectedIndex = EditorGUILayout.Popup ( "Platform", selectedIndex, _targets );
+		BuildTargetGroup target = (BuildTargetGroup)Enum.Parse(typeof(BuildTargetGroup), _targets[newSelectedIndex]);
+
 		if ( target != _symbolManager.SelectedTarget )
 		{
 			_scrollPos = Vector2.zero;
